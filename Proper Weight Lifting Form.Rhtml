@@ -1,0 +1,151 @@
+<html>
+
+<head>
+  <title>Wearable fitness devices have profound ability to predict proper weight lifting techniques.</title>
+</head>
+
+<body>
+
+<h1>Wearable fitness devices collect data that can predict proper weight lifting technique with 99.95% accuracy.</h1>
+
+<h2>Executive Summary:</h2>
+<p>
+A Gradient Boosting Machine (gbm) is trained using wearable fitness device sensor data to predict whether weight lifting techniques are being performed properly.  A trained model is able to achieve 99.95% accuracy predicting the five different outcomes (A = Good Technique; B,C,D,E = Bad Techniques).
+</p>
+
+<!--begin.rcode echo=F, message=F
+library(doSNOW)
+library(caret)
+library(corrplot)
+library(rpart)
+
+cl <- makeCluster(8)
+registerDoSNOW(cl)
+
+training.all <- read.csv('pml-training.csv', na.strings='#DIV/0!')
+training.all <- training.all[, !names(training.all) %in% c('X', 'user_name','raw_timestamp_part_1','raw_timestamp_part_2', 'cvtd_timestamp')]
+
+set.seed(12345)
+inTrain <- createDataPartition(training.all$classe, p=0.7, list=F)
+training <- training.all[inTrain,]  
+testing <- training.all[-inTrain,]
+
+nzvs <- nearZeroVar(x=training, saveMetrics = F, allowParallel = T)
+training <- training[, -nzvs]
+testing <- testing[, -nzvs]
+
+
+
+# Identify the numeric fields so we can exclude non-numerics from preProcessing
+numFields <- sapply(names(training), function(a){is.numeric(training[, a])})
+# There are many div0 columns that I have loaded as NA.  Not sure if they're div0 correctly or not.  Choosing to impute values using k nearest neighbors.
+pp <- preProcess(x=training[, numFields], method = c('knnImpute'))
+training.x <- predict(pp, training[, numFields])
+testing.x <- predict(pp, testing[, numFields])
+
+training.y <- training$classe
+testing.y <- testing$classe
+
+end.rcode-->
+
+
+<h4>Data Preparation Techniques:</h4>
+<ol>
+  <li>19,622 observations of 155 variables were loaded from the source</li>
+  <li>Row names (X), user_name, and all timestamps were removed as predictors to minimize overfitting</li>
+  <li>Training and Testing sets were created using a 70% training random sampling from the overall set</li>
+  <li>To improve efficiency of model generation without losing predictive capabilities, 77 variables with near zero variance were removed from the training set</li>
+  <li>KNN Imputation was used to impute values that were loaded as NA (in cases primarily where values were #DIV/0! and thus columns were converted to factors)</li>
+  <li>Because tree-based methods are a good fit for this multi-class non-linear classification problem, no other monotonic transformations were used</li>
+</ol>
+
+<h4>Exploration of Training Data:</h4>
+<p>Initial data exploration shows many features with significant correlations to each class (A, B, C, D, E):</p>
+
+<!--begin.rcode fig.width=14, fig.height=4, echo=F
+
+doCorPlot <- function(x, y, targetValue, title, threshold=8)
+{
+  target <-  y == targetValue
+  df <- cbind(target, x)
+  names(df)[names(df) == 'target'] <- targetValue
+  corrs <- cor(df, use = 'pairwise')
+  top <- order(-abs(corrs[1,]))[1:threshold]
+  
+  # only plot the top 10 by strength  
+  corrplot(corrs[top,top], title=title)
+}
+par(mfrow=c(1,5))
+doCorPlot(training.x, training.y, 'A', '\n\n\n\n\n\nTop 10 Correlations with A')
+doCorPlot(training.x, training.y, 'B', '\n\n\n\n\n\nTop 10 Correlations with B')
+doCorPlot(training.x, training.y, 'C', '\n\n\n\n\n\nTop 10 Correlations with C')
+doCorPlot(training.x, training.y, 'D', '\n\n\n\n\n\nTop 10 Correlations with D')
+doCorPlot(training.x, training.y, 'E', '\n\n\n\n\n\nTop 10 Correlations with E')
+
+end.rcode-->
+
+<h4>Training the Predictive Algorithms</h4>
+<p>Three different classification algorithms were tested with varying results: Decision Trees (rpart), Random Forests, and Gradient Boosting Machine (boosted trees).  In each trained algorithm, repeated 10-fold cross-validation was performed to minimize overfitting while optimizing tuning parameters for maximum classification accuracy.</p>
+
+<p>The best performing algorithm was created using <b>Gradient Boosting Machine (gbm)</b> package which combines boosting and trees to achieve an outstanding <b>99.95% overall class prediction accuracy</b> on test data.</p>
+
+<!--begin.rcode  fig.width=10, fig.height=10, echo=F, message=F
+#### Gradient Boosting Machine ####
+reload<-0
+if(reload) {
+  set.seed(12345)
+  gbm.fit <- train(y=training.y, 
+                   x=training.x,
+                   method='gbm',
+                   trControl = trainControl(method='cv', number=10, repeats=10),
+                   tuneGrid = expand.grid(n.trees=c(50,100,250,500,1000), interaction.depth=c(5,7,9), shrinkage=c(0.1), n.minobsinnode=50)
+                )
+  save(gbm.fit, file='gbm.fit.Rda')
+}
+
+load('gbm.fit.Rda')
+end.rcode-->
+
+<h4>Tuning the Algorithm for Maximum Accuracy</h4>
+<p>Through experimentation, excellent tuning parameters were found using 10-fold cross-validation with 10 repeats.  These parameters include 500 trees with an interaction depth of 7 levels, shrinkage of 0.1, and 50 minimum observations in each leaf node.</p>
+
+<!--begin.rcode  fig.width=10, fig.height=6, echo=F, message=F
+plot(gbm.fit, main='Tuning Curve for GBM Fitting')
+end.rcode-->
+
+<p>Variables with non-zero effects in the final predictive model are plotted below (from most influential to least).</p>
+
+<!--begin.rcode  fig.width=10, fig.height=10, echo=F, message=F
+plot(varImp(gbm.fit), main='Variable Importance for boosted tree (gbm) predictive model')
+end.rcode-->
+
+
+<h4>Results from the Testing Dataset: Confusion Matrix and Summary of Accuracy</h4>
+
+<!--begin.rcode  fig.width=10, fig.height=10, echo=F
+confusionMatrix(predict(gbm.fit, testing.x), testing.y)
+end.rcode-->
+
+
+<!--begin.rcode echo=F, message=F
+#### Holdout Set Evaluation ####
+holdout.all <- read.csv('pml-testing.csv', na.strings='#DIV/0!')
+
+#Perform the knn imputation on the holdout set using the pre-processor developed for training.
+holdout <- predict(pp, holdout.all[, names(training.x)])
+holdout.predictions <- predict(gbm.fit, holdout)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(holdout.predictions)
+end.rcode-->
+
+
+</body>
+</html>
